@@ -21,7 +21,8 @@ async function showCodes() {
   
   accounts.forEach((acc, idx) => {
     if (acc.name.split(':')[1]){
-      acc.name = acc.name.split(':')[1];
+      let [service, email] = acc.name.split(':');
+      acc.name = `(${service}) ${email}`;
     }
     if (spinnies.pick(`${idx}`)) {
       spinnies.update(`${idx}`, { text: `${totp(acc.totpSecret)}: ${acc.name}`, spinnerColor })
