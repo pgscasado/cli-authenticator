@@ -1,5 +1,5 @@
 {
-  "name": "cli-authenticator",
+  "name": "auth",
   "imports": {
     "#root": "./src"
   },
