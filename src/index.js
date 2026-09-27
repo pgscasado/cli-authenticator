@@ -1,56 +1,74 @@
 #!/usr/bin/env node
 
-import Spinnies from 'terminal-multi-spinners';
-import { accounts } from '../accounts.js';
-import totp from 'totp-generator';
+import { addAll } from './accounts.js';
+import { promptHidden } from './prompt.js';
+import { otpsFromFile, otpsFromString } from './qr.js';
+import { runUi } from './ui.js';
+import { changePassword, createVault, openVault, saveVault, vaultExists, vaultPath } from './vault.js';
 
-const sleep = (ms = 1000) => new Promise((r) => setTimeout(r, ms));
-const frames = '⠇⠋⠙⠸⠴⠦'.split('');
-const spinnies = new Spinnies({ frames });
+const USAGE = `Usage:
+  auth                      show live codes
+  auth add <uri>            add from an otpauth:// or Google Authenticator export link
+  auth import <file>        import a QR code image (PNG, JPEG, ...) or a legacy accounts.js file
+  auth passwd               change the master password`;
 
-async function showCodes() {
-  const expiresIn = (30 - Math.round(new Date().getTime() / 1000) % 30);
-  let spinnerColor = 'green';
-  if (expiresIn <= 20) {
-    spinnerColor = 'yellow';
-  }
-  if (expiresIn <= 10) {
-    spinnerColor = 'red';
-  }
-  
-  
-  accounts.forEach((acc, idx) => {
-    if (acc.name.split(':')[1]){
-      let [service, email] = acc.name.split(':');
-      acc.name = `(${service}) ${email}`;
-    }
-    if (spinnies.pick(`${idx}`)) {
-      spinnies.update(`${idx}`, { text: `${totp(acc.totpSecret)}: ${acc.name}`, spinnerColor })
-    } else {
-      spinnies.add(`${idx}`, { text: `${totp(acc.totpSecret)}: ${acc.name}`, spinnerColor })
-    }
-  });
-  if (spinnies.pick('counter')) {
-    spinnies.update('counter', {
-      text: `Expirando em ${(30 - Math.round(new Date().getTime() / 1000) % 30)}`,
-      status: 'non-spinnable',
-      color: spinnerColor
-    })
-  } else {
-    spinnies.add('counter', {
-      text: `Expirando em ${(30 - Math.round(new Date().getTime() / 1000) % 30)}`,
-      status: 'non-spinnable',
-      color: spinnerColor
-    })
-  }
-  await sleep();
-  showCodes();
+function fail(message) {
+  console.error(message);
+  process.exit(1);
 }
-console.clear();
-process.stdin.setRawMode(true);
-process.stdin.resume();
-process.stdin.on('data', function() {
-  console.clear();
-  process.exit(process, 0);
-});
-showCodes();
+
+async function newPassword(label) {
+  const password = await promptHidden(`${label}: `);
+  if (password.length < 8) fail('Use at least 8 characters.');
+  if ((await promptHidden('Confirm password: ')) !== password) fail("Passwords don't match.");
+  return password;
+}
+
+async function unlock() {
+  if (vaultExists()) return openVault(await promptHidden('Master password: '));
+  console.log(`No vault yet. Creating one at ${vaultPath}`);
+  return createVault(await newPassword('New master password'));
+}
+
+async function addAndSave(parsed) {
+  const vault = await unlock();
+  const { added, message } = addAll(vault, parsed);
+  if (added) saveVault(vault);
+  console.log(message);
+}
+
+const [cmd, ...args] = process.argv.slice(2);
+
+try {
+  switch (cmd) {
+    case undefined: {
+      if (!process.stdin.isTTY) fail('The live view needs an interactive terminal.');
+      runUi(await unlock());
+      break;
+    }
+    case 'add':
+      if (!args[0]) fail(USAGE);
+      // `add --image` is kept as an alias for `import`.
+      await addAndSave(args[0] === '--image' ? await otpsFromFile(args[1] ?? fail(USAGE)) : otpsFromString(args[0]));
+      break;
+    case 'import':
+      if (!args[0]) fail(USAGE);
+      await addAndSave(await otpsFromFile(args[0]));
+      break;
+    case 'passwd': {
+      const vault = await unlock();
+      changePassword(vault, await newPassword('New master password'));
+      console.log('Password changed.');
+      break;
+    }
+    case 'help':
+    case '-h':
+    case '--help':
+      console.log(USAGE);
+      break;
+    default:
+      fail(USAGE);
+  }
+} catch (err) {
+  fail(err.message);
+}
