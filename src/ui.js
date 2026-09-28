@@ -153,7 +153,8 @@ export function runUi(vault) {
       const label = fit(otp.label, cols - 1 - prefix.length);
       if (i === selected) {
         // Dark gray bar across the full width with white text.
-        lines.push(`${SELECTED}${fit(`› ${prefix.slice(2)}${label}`, cols - 1)}${CSI}K${CSI}0m`);
+        // Padded with spaces: not every terminal fills erased cells with the current background.
+        lines.push(`${SELECTED}${fit(`› ${prefix.slice(2)}${label}`, cols - 1).padEnd(cols - 1)}${CSI}0m`);
       } else {
         lines.push(`  ${styleText(color, code)}   ${otp.issuer.padEnd(issuerWidth)}  ${styleText('yellow', label)}`);
       }

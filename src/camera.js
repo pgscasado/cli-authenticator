@@ -169,8 +169,9 @@ export function renderPreview({ width, height, data }, cols, rows, { margin = 0,
       line += (color === last ? '' : color) + '▀';
       last = color;
     }
-    // With a backdrop, erase-to-end-of-line paints the right margin in the same color.
-    lines.push(bg ? `${line}${CSI}0m${bg}${CSI}K${CSI}0m` : `${line}${CSI}0m`);
+    // The right margin is painted with spaces: not every terminal fills erased cells with the current background.
+    const right = ' '.repeat(Math.max(0, cols - pad.length - outW));
+    lines.push(bg ? `${line}${CSI}0m${bg}${right}${CSI}0m` : `${line}${CSI}0m`);
   }
   return lines;
 }
