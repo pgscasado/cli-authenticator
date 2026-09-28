@@ -19,7 +19,17 @@ const BANNER = {
 };
 const rgbBg = ([r, g, b]) => `${CSI}48;2;${r};${g};${b}m`;
 const rgbText = ([r, g, b]) => `${CSI}38;2;${r};${g};${b};1m`;
-const HELP = ' ↑↓ select · enter copy · a paste · c camera · i import · d del · esc exit';
+// `needsItem` hotkeys do nothing on an empty list, so they're grayed out then.
+const HELP = [
+  { text: '↑↓ select', needsItem: true },
+  { text: 'enter copy', needsItem: true },
+  { text: 'a paste' },
+  { text: 'c camera' },
+  { text: 'i import' },
+  { text: 'd del', needsItem: true },
+  { text: 'esc exit' },
+];
+const DISABLED = `${CSI}38;5;244m`; // gray
 const CAMERA_HELP = ' Hold the QR code up to the camera · esc close';
 
 // Terminals paste dragged files as "C:\path\x.png", 'path', or path\ with\ spaces.
@@ -153,9 +163,26 @@ export function runUi(vault) {
     const footer = input !== null
       ? fit(` Import file (QR image or accounts.js): ${input}█`, cols - 1)
       : status ? styleText(status.color, fit(` ${status.message}`, cols - 1)) : '';
-    lines.push(below ? styleText('yellow', `  ↓ ${below} more`) : '', styleText('yellow', fit(HELP, cols - 1)), footer);
+    lines.push(below ? styleText('yellow', `  ↓ ${below} more`) : '', helpLine(cols - 1, entries.length > 0), footer);
 
     draw(lines, rows);
+  }
+
+  // Hotkeys line, cut to `width`; hotkeys that need a selected item are gray when there is none.
+  function helpLine(width, hasItems) {
+    let line = '';
+    let used = 0;
+    for (const [i, { text, needsItem }] of HELP.entries()) {
+      const sep = i ? ' · ' : ' ';
+      const part = sep + text;
+      const shown = used + part.length > width ? fit(part, width - used) : part;
+      const label = shown.slice(sep.length);
+      line += styleText('yellow', shown.slice(0, sep.length));
+      line += needsItem && !hasItems ? `${DISABLED}${label}${CSI}39m` : styleText('yellow', label);
+      used += shown.length;
+      if (shown !== part) break;
+    }
+    return line;
   }
 
   // No trailing newline: writing past the last row would scroll the screen.
