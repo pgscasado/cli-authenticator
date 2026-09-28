@@ -4,11 +4,11 @@ import { addAll } from './accounts.js';
 import { promptHidden } from './prompt.js';
 import { otpsFromFile, otpsFromString } from './qr.js';
 import { runUi } from './ui.js';
-import { changePassword, createVault, openVault, saveVault, vaultExists, vaultPath } from './vault.js';
+import { changePassword, createVault, openVault, updateVault, vaultExists, vaultPath } from './vault.js';
 
 const USAGE = `Usage:
   auth                      show live codes
-  auth add <uri>            add from an otpauth:// or Google Authenticator export link
+  auth add                  paste an otpauth:// or Google Authenticator export link (hidden)
   auth import <file>        import a QR code image (PNG, JPEG, ...) or a legacy accounts.js file
   auth passwd               change the master password`;
 
@@ -32,8 +32,7 @@ async function unlock() {
 
 async function addAndSave(parsed) {
   const vault = await unlock();
-  const { added, message } = addAll(vault, parsed);
-  if (added) saveVault(vault);
+  const { message } = updateVault(vault, (v) => addAll(v, parsed));
   console.log(message);
 }
 
@@ -46,11 +45,20 @@ try {
       runUi(await unlock());
       break;
     }
-    case 'add':
-      if (!args[0]) fail(USAGE);
+    case 'add': {
       // `add --image` is kept as an alias for `import`.
-      await addAndSave(args[0] === '--image' ? await otpsFromFile(args[1] ?? fail(USAGE)) : otpsFromString(args[0]));
+      if (args[0] === '--image') {
+        await addAndSave(await otpsFromFile(args[1] ?? fail(USAGE)));
+        break;
+      }
+      if (args[0]) {
+        console.error('Warning: the link is now in your shell history. Run `auth add` without arguments to paste it instead.');
+      }
+      // Prompted with hidden input so the secret never lands in shell history or the process list.
+      const uri = args[0] ?? (await promptHidden('otpauth link: ')).trim();
+      await addAndSave(otpsFromString(uri));
       break;
+    }
     case 'import':
       if (!args[0]) fail(USAGE);
       await addAndSave(await otpsFromFile(args[0]));

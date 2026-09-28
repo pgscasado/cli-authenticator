@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseUri } from './accounts.js';
@@ -38,32 +38,55 @@ export function vaultExists() {
   return existsSync(vaultPath);
 }
 
-export function createVault(password) {
-  const kdf = newKdf();
-  const vault = { kdf, key: deriveKey(password, kdf), entries: [] };
-  saveVault(vault);
-  return vault;
+const mtime = () => statSync(vaultPath).mtimeMs;
+
+// Short exclusive lock around read-modify-write, so two running copies can't overwrite each other.
+function withLock(fn) {
+  const lock = `${vaultPath}.lock`;
+  mkdirSync(dirname(vaultPath), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + 3000;
+  for (;;) {
+    try {
+      closeSync(openSync(lock, 'wx'));
+      break;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      try {
+        // A lock older than 10s was left behind by a crashed process.
+        if (Date.now() - statSync(lock).mtimeMs > 10_000) rmSync(lock, { force: true });
+      } catch {}
+      if (Date.now() > deadline) throw new Error('The vault is busy (locked by another auth process).');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    rmSync(lock, { force: true });
+  }
 }
 
-export function openVault(password) {
+function readFile() {
   const file = JSON.parse(readFileSync(vaultPath, 'utf8'));
   if (file.v !== 1) throw new Error(`Unsupported vault version: ${file.v}`);
+  return file;
+}
 
-  const key = deriveKey(password, file.kdf);
+function decrypt(file, key) {
   const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(file.iv, 'base64'));
   decipher.setAAD(aad(file.kdf));
   decipher.setAuthTag(Buffer.from(file.tag, 'base64'));
-
   let plain;
   try {
     plain = Buffer.concat([decipher.update(Buffer.from(file.data, 'base64')), decipher.final()]);
   } catch {
     throw new Error('Wrong password (or the vault file is corrupted).');
   }
-  return { kdf: file.kdf, key, entries: JSON.parse(plain.toString('utf8')).map(parseUri) };
+  return JSON.parse(plain.toString('utf8')).map(parseUri);
 }
 
-export function saveVault({ kdf, key, entries }) {
+function write(vault) {
+  const { kdf, key, entries } = vault;
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   cipher.setAAD(aad(kdf));
@@ -75,10 +98,61 @@ export function saveVault({ kdf, key, entries }) {
   const tmp = `${vaultPath}.tmp`;
   writeFileSync(tmp, JSON.stringify(file, null, 2), { mode: 0o600 });
   renameSync(tmp, vaultPath);
+  vault.mtimeMs = mtime();
+}
+
+// Loads what's on disk into `vault` (another process may have changed it).
+function reload(vault) {
+  const file = readFile();
+  if (file.kdf.salt !== vault.kdf.salt) {
+    throw new Error('The master password was changed in another session. Restart auth.');
+  }
+  vault.entries = decrypt(file, vault.key);
+  vault.mtimeMs = mtime();
+}
+
+export function createVault(password) {
+  const kdf = newKdf();
+  const vault = { kdf, key: deriveKey(password, kdf), entries: [] };
+  withLock(() => {
+    if (vaultExists()) throw new Error('A vault was just created by another process. Run auth again.');
+    write(vault);
+  });
+  return vault;
+}
+
+export function openVault(password) {
+  const file = readFile();
+  const key = deriveKey(password, file.kdf);
+  return { kdf: file.kdf, key, entries: decrypt(file, key), mtimeMs: mtime() };
+}
+
+// Applies `mutate(vault)` to the latest vault on disk and saves it. Returns mutate's result.
+export function updateVault(vault, mutate) {
+  return withLock(() => {
+    if (vaultExists()) reload(vault);
+    const result = mutate(vault);
+    write(vault);
+    return result;
+  });
+}
+
+// Picks up changes saved by another process. Returns true if the entries changed.
+export function refreshVault(vault) {
+  try {
+    if (!vaultExists() || mtime() === vault.mtimeMs) return false;
+    reload(vault);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function changePassword(vault, password) {
-  vault.kdf = newKdf();
-  vault.key = deriveKey(password, vault.kdf);
-  saveVault(vault);
+  withLock(() => {
+    reload(vault);
+    vault.kdf = newKdf();
+    vault.key = deriveKey(password, vault.kdf);
+    write(vault);
+  });
 }

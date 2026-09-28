@@ -1,13 +1,14 @@
 import { homedir } from 'node:os';
 import { emitKeypressEvents } from 'node:readline';
 import { styleText } from 'node:util';
-import { addAll, displayName } from './accounts.js';
+import { addAll, cleanText, displayName } from './accounts.js';
 import { decodeFrame, openCamera, renderPreview } from './camera.js';
-import { clearClipboard, writeClipboard } from './clipboard.js';
+import { clearClipboard, readClipboard, writeClipboard } from './clipboard.js';
 import { otpsFromClipboard, otpsFromFile, otpsFromString } from './qr.js';
-import { saveVault } from './vault.js';
+import { refreshVault, updateVault } from './vault.js';
 
 const CSI = '\x1b[';
+const CLIPBOARD_CLEAR_MS = 30_000;
 const SELECTED = `${CSI}48;5;237;97;1m`; // dark gray background, bold white text
 // Camera state colors, as exact RGB so terminal themes can't remap them.
 const BANNER = {
@@ -41,7 +42,7 @@ export function runUi(vault) {
   let camera = null; // { frame, stop, lastUri, seen } while scanning
 
   function setStatus(message, color = 'yellow', sticky = false) {
-    status = { message, color };
+    status = { message: cleanText(message), color };
     clearTimeout(statusTimer);
     if (!sticky) statusTimer = setTimeout(() => ((status = null), render()), 4000);
     render();
@@ -100,7 +101,7 @@ export function runUi(vault) {
         }));
       }
       while (lines.length < 2 + previewRows) lines.push('');
-      const text = fit(banner.text, cols - 3);
+      const text = fit(cleanText(banner.text), cols - 3);
       const pad = ' '.repeat(Math.max(0, Math.floor((cols - 1 - text.length) / 2)));
       lines.push('', `${pad}${banner.style === 'scanning' ? `${CSI}1m` : rgbText(color)}${text}${CSI}0m`);
       const footer = status ? styleText(status.color, fit(` ${status.message}`, cols - 1)) : '';
@@ -139,8 +140,22 @@ export function runUi(vault) {
     stdout.write(`${CSI}H${lines.slice(0, rows).map((l) => `${l}${CSI}K`).join('\n')}`);
   }
 
-  function quit() {
+  let copied = null; // { code, timer } for the last code put on the clipboard
+
+  // Clears the clipboard if it still holds the copied code (the user may have copied something else since).
+  async function clearCopied() {
+    if (!copied) return;
+    const { code, timer } = copied;
+    copied = null;
+    clearTimeout(timer);
+    try {
+      if ((await readClipboard()).text === code) await clearClipboard();
+    } catch {}
+  }
+
+  async function quit() {
     stdout.write(`${CSI}?25h${CSI}?1049l`);
+    await clearCopied();
     process.exit(0);
   }
 
@@ -150,11 +165,8 @@ export function runUi(vault) {
     setStatus(label, 'yellow', true);
     try {
       const parsed = await load();
-      let { added, message } = addAll(vault, parsed);
-      if (added) {
-        saveVault(vault);
-        selected = vault.entries.length - 1;
-      }
+      let { added, message } = updateVault(vault, (v) => addAll(v, parsed));
+      if (added) selected = vault.entries.length - 1;
       if (cleanup && parsed.otps.length) {
         try {
           await cleanup();
@@ -241,11 +253,13 @@ export function runUi(vault) {
     } catch (err) {
       return flashBanner(cam, { style: 'error', text: `✗ ${err.message}` }, 3000);
     }
-    const { added, message } = addAll(vault, parsed);
-    if (added) {
-      saveVault(vault);
-      selected = vault.entries.length - 1;
+    let added, message;
+    try {
+      ({ added, message } = updateVault(vault, (v) => addAll(v, parsed)));
+    } catch (err) {
+      return flashBanner(cam, { style: 'error', text: `✗ ${err.message}` }, 3000);
     }
+    if (added) selected = vault.entries.length - 1;
     // Google Authenticator splits big exports across several QR codes: keep scanning until all are seen.
     const { index, size } = parsed.batch;
     cam.seen.add(index);
@@ -263,8 +277,11 @@ export function runUi(vault) {
     const otp = vault.entries[selected];
     if (!otp) return;
     try {
-      await writeClipboard(otp.generate());
-      setStatus(`Copied code for ${displayName(otp)}.`, 'green');
+      const code = otp.generate();
+      await writeClipboard(code, { sensitive: true });
+      clearTimeout(copied?.timer);
+      copied = { code, timer: setTimeout(clearCopied, CLIPBOARD_CLEAR_MS) };
+      setStatus(`Copied code for ${displayName(otp)}. Clipboard clears in 30s.`, 'green');
     } catch (err) {
       setStatus(`Could not copy: ${err.message}`, 'red');
     }
@@ -299,9 +316,14 @@ export function runUi(vault) {
     if (confirmDelete) {
       confirmDelete = false;
       if (key.name !== 'y') return setStatus('Delete cancelled.');
-      const [otp] = vault.entries.splice(selected, 1);
+      const otp = vault.entries[selected];
+      try {
+        // Matched by secret: the list may have been reloaded with other changes in between.
+        updateVault(vault, (v) => (v.entries = v.entries.filter((e) => e.secret.base32 !== otp.secret.base32)));
+      } catch (err) {
+        return setStatus(err.message, 'red');
+      }
       selected = Math.max(0, Math.min(selected, vault.entries.length - 1));
-      saveVault(vault);
       return setStatus(`Deleted ${displayName(otp)}.`, 'yellow');
     }
 
@@ -355,6 +377,8 @@ export function runUi(vault) {
   stdout.on('resize', () => (stdout.write(`${CSI}2J`), render()));
 
   const tick = () => {
+    // Picks up accounts added or removed by another running copy.
+    if (!camera && refreshVault(vault)) selected = Math.max(0, Math.min(selected, vault.entries.length - 1));
     render();
     setTimeout(tick, 1000 - (Date.now() % 1000));
   };
