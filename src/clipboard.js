@@ -57,8 +57,24 @@ export async function readClipboard() {
   return { text: text ?? '' };
 }
 
-export async function writeClipboard(text) {
-  if (process.platform === 'win32') return pipeTo('clip.exe', [], text);
+// Windows: marks the data so clipboard history (Win+V), cloud sync and clipboard monitors skip it.
+const WIN_SENSITIVE_COPY = `
+  Add-Type -AssemblyName System.Windows.Forms
+  $text = [Console]::In.ReadToEnd()
+  $data = New-Object System.Windows.Forms.DataObject
+  $data.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $text)
+  foreach ($format in 'CanIncludeInClipboardHistory', 'CanUploadToCloudClipboard') {
+    $data.SetData($format, (New-Object System.IO.MemoryStream(, [byte[]](0, 0, 0, 0))))
+  }
+  $data.SetData('ExcludeClipboardContentFromMonitorProcessing', (New-Object System.IO.MemoryStream(, [byte[]](0))))
+  [System.Windows.Forms.Clipboard]::SetDataObject($data, $true)`;
+
+// `sensitive` keeps the text out of clipboard history where the OS supports it (Windows).
+export async function writeClipboard(text, { sensitive = false } = {}) {
+  if (process.platform === 'win32') {
+    if (sensitive) return pipeTo('powershell.exe', ['-NoProfile', '-STA', '-Command', WIN_SENSITIVE_COPY], text);
+    return pipeTo('clip.exe', [], text);
+  }
   if (process.platform === 'darwin') return pipeTo('pbcopy', [], text);
   try {
     await pipeTo('wl-copy', [], text);
