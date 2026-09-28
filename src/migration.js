@@ -1,4 +1,5 @@
 import * as OTPAuth from 'otpauth';
+import { newTotp } from './accounts.js';
 
 // Decodes Google Authenticator export links: otpauth-migration://offline?data=<base64 protobuf>
 // Schema: MigrationPayload { repeated OtpParameters otp_parameters = 1; int32 batch_size = 3; int32 batch_index = 4; }
@@ -76,7 +77,7 @@ export function parseMigrationUri(uri) {
     }
     // Names are usually "Issuer:account"; keep just the account part as the label.
     const label = p.issuer && p.name.startsWith(`${p.issuer}:`) ? p.name.slice(p.issuer.length + 1) : p.name;
-    otps.push(new OTPAuth.TOTP({
+    otps.push(newTotp({
       issuer: p.issuer,
       label: label.trim(),
       algorithm: ALGORITHMS[p.algorithm],

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { fromLegacy, parseUri } from './accounts.js';
+import { fromLegacy, parseLegacySource, parseUri } from './accounts.js';
 import { readClipboard } from './clipboard.js';
 import { decodeImage } from './decode.js';
 import { parseMigrationUri } from './migration.js';
@@ -25,10 +25,9 @@ export async function otpsFromClipboard() {
 // Accepts a QR code image (PNG, JPEG, ...) or a legacy accounts.js file.
 export async function otpsFromFile(path) {
   if (/\.m?js$/i.test(path)) {
-    // Loaded from source so it parses as ESM regardless of the nearest package.json.
-    const source = readFileSync(path, 'utf8');
-    const { accounts } = await import(`data:text/javascript,${encodeURIComponent(source)}`);
-    if (!Array.isArray(accounts)) throw new Error('That file does not export an `accounts` array.');
+    // Parsed as text, never executed: an imported file must not be able to run code.
+    const accounts = parseLegacySource(readFileSync(path, 'utf8'));
+    if (!accounts.length) throw new Error('No { name, totpSecret } entries found in that file.');
     return { otps: accounts.map(fromLegacy), skipped: 0, batch: { index: 0, size: 1 } };
   }
   const uri = await decodeImage(readFileSync(path));
