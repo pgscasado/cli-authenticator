@@ -1,13 +1,21 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import ffmpegPath from 'ffmpeg-static';
 import { decodePixels } from './decode.js';
 
 const CSI = '\x1b[';
 
+// Uses the system's ffmpeg (or FFMPEG_PATH), installed through a package manager that verifies it,
+// rather than a binary downloaded by npm at install time.
+const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
+const MISSING_FFMPEG = 'The camera needs ffmpeg: winget install Gyan.FFmpeg · brew install ffmpeg · apt install ffmpeg';
+
+const friendly = (err) => (err?.code === 'ENOENT' ? new Error(MISSING_FFMPEG) : err);
+
 // ffmpeg exits non-zero when only listing devices, so read stderr either way.
 function listDevices(args) {
-  return new Promise((resolve) => execFile(ffmpegPath, ['-hide_banner', ...args], (_err, _out, stderr) => resolve(stderr)));
+  return new Promise((resolve, reject) =>
+    execFile(ffmpegPath, ['-hide_banner', ...args], (err, _out, stderr) =>
+      err?.code === 'ENOENT' ? reject(friendly(err)) : resolve(stderr)));
 }
 
 async function cameraInput() {
@@ -68,7 +76,11 @@ export function startCapture(inputArgs, { fps = 8, maxWidth = 1920, onFrame, onE
     onFrame({ ...size, data });
   });
 
-  child.on('error', (err) => !stopped && onError(err));
+  child.on('error', (err) => {
+    if (stopped) return;
+    stopped = true;
+    onError(friendly(err));
+  });
   child.on('exit', () => {
     process.off('exit', stop);
     if (stopped) return;
