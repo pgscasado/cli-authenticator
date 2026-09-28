@@ -83,6 +83,29 @@ export function runUi(vault) {
       : `${styleText('bold', fit(title, cols - 5))} ${styleText(color, `${String(remaining).padStart(2)}s`)}`;
     const above = offset;
     const below = Math.max(0, entries.length - offset - listHeight);
+    if (camera?.missingFfmpeg) {
+      const { installCommand } = camera.missingFfmpeg;
+      const center = (text, style = '') => {
+        const t = fit(text, cols - 1);
+        return `${' '.repeat(Math.max(0, Math.floor((cols - 1 - t.length) / 2)))}${style}${t}${CSI}0m`;
+      };
+      const lines = [header, '', '', center('The camera needs ffmpeg, which is not installed.', rgbText(BANNER.error)), ''];
+      if (installCommand) {
+        lines.push(center('Install it with:'), '', center(installCommand, rgbText(BANNER.hint)), '');
+        lines.push(center(process.platform === 'win32'
+          ? 'Then open a new terminal (so it sees the updated PATH) and press c again.'
+          : 'Then press c again.'));
+      } else {
+        lines.push(center('Download it from https://ffmpeg.org/download.html'), center('or set FFMPEG_PATH to an ffmpeg binary.'));
+      }
+      lines.push('', center('You can also add accounts with a screenshot (a) or an image file (i).', `${CSI}2m`));
+      while (lines.length < 2 + listHeight) lines.push('');
+      const footer = status ? styleText(status.color, fit(` ${status.message}`, cols - 1)) : '';
+      const help = installCommand ? ' enter copy command · esc back' : ' esc back';
+      lines.push('', styleText('yellow', fit(help, cols - 1)), footer);
+      return draw(lines, rows);
+    }
+
     if (camera) {
       // A colored band crosses behind the preview so the scanner state is obvious at a glance;
       // the text sits below on the plain background, where it stays readable.
@@ -213,14 +236,34 @@ export function runUi(vault) {
         },
         onError(err) {
           if (camera !== cam) return;
+          if (err.code === 'NO_FFMPEG') return showMissingFfmpeg(cam, err);
           stopCamera();
           setStatus(err.message, 'red');
         },
       });
       if (camera !== cam) cam.stop(); // closed while it was starting
     } catch (err) {
-      if (camera === cam) camera = null;
+      if (camera !== cam) return;
+      if (err.code === 'NO_FFMPEG') return showMissingFfmpeg(cam, err);
+      camera = null;
       setStatus(err.message, 'red');
+    }
+  }
+
+  function showMissingFfmpeg(cam, err) {
+    cam.stop = null;
+    cam.missingFfmpeg = { installCommand: err.installCommand };
+    render();
+  }
+
+  async function copyInstallCommand() {
+    const command = camera.missingFfmpeg.installCommand;
+    if (!command) return;
+    try {
+      await writeClipboard(command);
+      setStatus('Install command copied. Paste it into a terminal.', 'green');
+    } catch (err) {
+      setStatus(`Could not copy: ${err.message}`, 'red');
     }
   }
 
@@ -310,6 +353,7 @@ export function runUi(vault) {
 
   function onKey(str, key = {}) {
     if (key.ctrl && key.name === 'c') return quit();
+    if (camera?.missingFfmpeg && key.name === 'return') return copyInstallCommand();
     if (busy || camera || key.name === 'escape') return;
     if (input !== null) return onInputKey(str, key);
 

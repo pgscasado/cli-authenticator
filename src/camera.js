@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { decodePixels } from './decode.js';
 
 const CSI = '\x1b[';
@@ -7,9 +8,47 @@ const CSI = '\x1b[';
 // Uses the system's ffmpeg (or FFMPEG_PATH), installed through a package manager that verifies it,
 // rather than a binary downloaded by npm at install time.
 const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
-const MISSING_FFMPEG = 'The camera needs ffmpeg: winget install Gyan.FFmpeg · brew install ffmpeg · apt install ffmpeg';
 
-const friendly = (err) => (err?.code === 'ENOENT' ? new Error(MISSING_FFMPEG) : err);
+// lstat, not exists: Windows installs winget as an app execution alias, which can't be stat'ed.
+function present(file) {
+  try {
+    lstatSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function onPath(command) {
+  const exts = process.platform === 'win32' ? (process.env.PATHEXT ?? '.EXE;.CMD').split(';') : [''];
+  return (process.env.PATH ?? '').split(delimiter).some((dir) => dir && exts.some((ext) => present(join(dir, command + ext))));
+}
+
+// The install command for this OS, using the first package manager found.
+const INSTALLERS = {
+  win32: [['winget', 'winget install Gyan.FFmpeg'], ['choco', 'choco install ffmpeg'], ['scoop', 'scoop install ffmpeg']],
+  darwin: [['brew', 'brew install ffmpeg'], ['port', 'sudo port install ffmpeg']],
+  linux: [
+    ['apt', 'sudo apt install ffmpeg'],
+    ['dnf', 'sudo dnf install ffmpeg-free'],
+    ['pacman', 'sudo pacman -S ffmpeg'],
+    ['zypper', 'sudo zypper install ffmpeg'],
+    ['apk', 'sudo apk add ffmpeg'],
+  ],
+};
+
+export function ffmpegInstallCommand() {
+  return (INSTALLERS[process.platform] ?? []).find(([manager]) => onPath(manager))?.[1] ?? null;
+}
+
+// ENOENT from spawning ffmpeg means it isn't installed; tag the error so the UI can guide the user.
+function friendly(err) {
+  if (err?.code !== 'ENOENT') return err;
+  const missing = new Error('The camera needs ffmpeg, which is not installed.');
+  missing.code = 'NO_FFMPEG';
+  missing.installCommand = ffmpegInstallCommand();
+  return missing;
+}
 
 // ffmpeg exits non-zero when only listing devices, so read stderr either way.
 function listDevices(args) {
