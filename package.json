@@ -4,7 +4,8 @@
   "description": "TOTP authenticator for the terminal: encrypted vault, live codes, and QR import from clipboard, files, or camera",
   "type": "module",
   "bin": {
-    "auth": "src/index.js"
+    "auth": "src/index.js",
+    "cli-authenticator": "src/index.js"
   },
   "files": [
     "src"
@@ -20,11 +21,15 @@
     "cli",
     "google-authenticator"
   ],
+  "homepage": "https://github.com/pgscasado/cli-authenticator#readme",
+  "bugs": {
+    "url": "https://github.com/pgscasado/cli-authenticator/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pgscasado/cli-authenticator.git"
   },
-  "author": "pgscasado",
+  "author": "Pedro Casado (https://pedrocasado.com)",
   "license": "ISC",
   "engines": {
     "node": ">=20.12"

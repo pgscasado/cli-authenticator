@@ -10,7 +10,8 @@ const USAGE = `Usage:
   auth                      show live codes
   auth add                  paste an otpauth:// or Google Authenticator export link (hidden)
   auth import <file>        import a QR code image (PNG, JPEG, ...) or a legacy accounts.js file
-  auth passwd               change the master password`;
+  auth passwd               change the master password
+  auth --version            print the version`;
 
 function fail(message) {
   console.error(message);
@@ -74,6 +75,12 @@ try {
     case '--help':
       console.log(USAGE);
       break;
+    case '-v':
+    case '--version': {
+      const { readFileSync } = await import('node:fs');
+      console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
+      break;
+    }
     default:
       fail(USAGE);
   }

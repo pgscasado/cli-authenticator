@@ -1,0 +1,3 @@
+# LF everywhere, whatever core.autocrlf says: this package is published to npm from a Windows
+# checkout, and a CRLF shebang ("node\r") breaks the `auth` command on macOS and Linux
+* text=auto eol=lf

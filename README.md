@@ -7,6 +7,9 @@ npm install -g cli-authenticator
 auth
 ```
 
+Or try it without installing: `npx cli-authenticator`. The command is also available as
+`cli-authenticator`, in case another tool already owns `auth` on your PATH.
+
 ## Usage
 
 Run `auth`, enter your master password, and your codes show up right away. The first run creates the vault.
